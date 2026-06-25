@@ -1,7 +1,7 @@
 ready_sound: sounds/ready.wav
 debug: true
 debounce_seconds: 0.25
-aplay_card: 0
+aplay_card: 1
 bindings:
   KEY_PAGEDOWN: sounds/feed.wav
   KEY_PAGEUP: sounds/feed.wav
