@@ -8,7 +8,7 @@ Type=simple
 User=bbplayers
 Group=bbplayers
 WorkingDirectory=/home/bbplayers/sfxbox
-ExecStart=/usr/bin/python3 /home/bbplayers/sfxbox/main.py
+ExecStart=/usr/bin/python3 /home/bbplayers/sfxbox/main.py --device /dev/input/by-id/usb-Logitech_USB_Receiver-event-if00
 Restart=on-failure
 RestartSec=2
 
