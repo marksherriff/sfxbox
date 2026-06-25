@@ -1,8 +1,8 @@
-ready_sound: sounds/ready.wav
+ready_sound: sounds/beep.wav
 debug: true
 debounce_seconds: 0.25
-aplay_card: 1
+aplay_card: 
 bindings:
-  KEY_PAGEDOWN: sounds/feed.wav
-  KEY_PAGEUP: sounds/feed.wav
-  KEY_DOT: sounds/feed.wav
+  KEY_PAGEDOWN: sounds/beep.wav
+  KEY_PAGEUP: sounds/beep.wav
+  KEY_DOT: sounds/beep.wav
