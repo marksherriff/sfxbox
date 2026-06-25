@@ -1,0 +1,14 @@
+[Unit]
+Description=SFX Box keyboard-driven sound effects service
+After=network.target sound.target
+
+[Service]
+Type=simple
+User=bbplayers
+WorkingDirectory=/home/bbplayers/sfxbox
+ExecStart=/usr/bin/python3 /home/bbplayers/sfxbox/main.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
