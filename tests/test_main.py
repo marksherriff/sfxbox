@@ -40,6 +40,27 @@ class MainModuleTests(unittest.TestCase):
         self.assertTrue(service._should_process_key("space"))
         self.assertFalse(service._should_process_key("space"))
 
+    def test_bindings_and_aplay_card_are_supported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_path = Path(tmp_dir) / "config.yaml"
+            config_path.write_text(
+                "ready_sound: sounds/ready.wav\n"
+                "aplay_card: 0\n"
+                "bindings:\n"
+                "  KEY_PAGEDOWN: sounds/feed.wav\n"
+                "  KEY_PAGEUP: sounds/feed.wav\n",
+                encoding="utf-8",
+            )
+
+            config = main.load_config(str(config_path))
+            self.assertEqual(config["bindings"]["KEY_PAGEDOWN"], "sounds/feed.wav")
+            self.assertEqual(config["aplay_card"], 0)
+
+            controller = main.SoundController(config, debounce_seconds=0.25)
+            command = controller._build_aplay_command("/tmp/test.wav")
+            self.assertIn("-D", command)
+            self.assertEqual(command[command.index("-D") + 1], "hw:0,0")
+
 
 if __name__ == "__main__":
     unittest.main()

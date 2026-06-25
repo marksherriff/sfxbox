@@ -38,6 +38,14 @@ class SoundController:
         self._playing = False
         self._last_played_at = 0.0
         self._debounce_seconds = debounce_seconds
+        self._aplay_card = config.get("aplay_card")
+
+    def _build_aplay_command(self, sound_path: str) -> list[str]:
+        command = ["aplay", "-q"]
+        if self._aplay_card is not None:
+            command.extend(["-D", f"hw:{self._aplay_card},0"])
+        command.append(sound_path)
+        return command
 
     def play(self, sound_path: Optional[str], *, cooldown: Optional[float] = None) -> bool:
         if not sound_path:
@@ -62,7 +70,7 @@ class SoundController:
         def _worker() -> None:
             try:
                 subprocess.run(
-                    ["aplay", "-q", resolved_path],
+                    self._build_aplay_command(resolved_path),
                     check=False,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -82,8 +90,18 @@ class SoundController:
         return self.play(ready_sound, cooldown=0.0)
 
     def play_for_key(self, key_name: str) -> bool:
-        sounds = self._config.get("sounds", {}) or {}
-        sound_path = sounds.get(key_name.lower()) or sounds.get("default")
+        bindings = self._config.get("bindings") or self._config.get("sounds", {}) or {}
+        if not isinstance(bindings, dict):
+            return False
+
+        normalized_key = normalize_key_name(key_name)
+        sound_path = None
+        for candidate in (normalized_key, key_name, key_name.lower(), normalized_key.lower() if normalized_key else None):
+            if candidate and candidate in bindings:
+                sound_path = bindings[candidate]
+                break
+        if sound_path is None:
+            sound_path = bindings.get("default")
         return self.play(sound_path)
 
 
@@ -181,7 +199,7 @@ class SfxBoxService:
         name = ecodes.KEY.get(code)
         if not name:
             return None
-        return name.lower()
+        return normalize_key_name(name)
 
 
 def load_config(path: Optional[str] = None) -> Dict[str, Any]:
@@ -190,6 +208,8 @@ def load_config(path: Optional[str] = None) -> Dict[str, Any]:
         "ready_sound": str(DEFAULT_SOUNDS_DIR / "ready.wav"),
         "debug": False,
         "debounce_seconds": 0.25,
+        "aplay_card": None,
+        "bindings": {},
         "sounds": {"default": str(DEFAULT_SOUNDS_DIR / "default.wav")},
     }
 
@@ -211,6 +231,8 @@ def load_config(path: Optional[str] = None) -> Dict[str, Any]:
             raise ConfigError("Config root must be a mapping.")
         config = default_config.copy()
         config.update(loaded)
+        if not isinstance(config.get("bindings"), dict):
+            raise ConfigError("Config 'bindings' must be a mapping.")
         if not isinstance(config.get("sounds"), dict):
             raise ConfigError("Config 'sounds' must be a mapping.")
         return config
@@ -229,12 +251,12 @@ def _load_simple_yaml(config_path: Path, default_config: Dict[str, Any]) -> Dict
                 continue
 
             if line.startswith(" "):
-                if current_section != "sounds":
-                    raise ConfigError("Nested YAML entries are only supported under 'sounds'.")
+                if current_section not in {"sounds", "bindings"}:
+                    raise ConfigError("Nested YAML entries are only supported under 'sounds' or 'bindings'.")
                 key, raw_value = [part.strip() for part in line.split(":", 1)]
                 if not key:
                     raise ConfigError("Invalid mapping entry in YAML config.")
-                data["sounds"][key] = _parse_scalar(raw_value)
+                data[current_section][key] = _parse_scalar(raw_value)
                 continue
 
             key, raw_value = [part.strip() for part in line.split(":", 1)]
@@ -248,6 +270,8 @@ def _load_simple_yaml(config_path: Path, default_config: Dict[str, Any]) -> Dict
                 data[key] = _parse_scalar(raw_value)
                 current_section = None
 
+    if not isinstance(data.get("bindings"), dict):
+        raise ConfigError("Config 'bindings' must be a mapping.")
     if not isinstance(data.get("sounds"), dict):
         raise ConfigError("Config 'sounds' must be a mapping.")
 
@@ -261,13 +285,29 @@ def _parse_scalar(value: str) -> Any:
         return False
     if value.startswith(("'", '"')) and value.endswith(("'", '"')):
         return value[1:-1]
-    return value
+    if value.isdigit() or (value.startswith("-") and value[1:].isdigit()):
+        return int(value)
+    try:
+        return float(value)
+    except ValueError:
+        return value
+
+
+def normalize_key_name(key_name: str) -> str:
+    return str(key_name).strip().upper()
 
 
 def resolve_sound_path(sound_path: str) -> str:
     expanded_path = Path(os.path.expanduser(sound_path))
-    if expanded_path.is_file():
+    if expanded_path.is_absolute():
+        if expanded_path.is_file():
+            return str(expanded_path)
         return str(expanded_path)
+
+    for base in (BASE_DIR, Path.cwd()):
+        candidate = (base / expanded_path).resolve()
+        if candidate.is_file():
+            return str(candidate)
 
     repo_local_path = BASE_DIR / "sounds" / expanded_path.name
     if repo_local_path.is_file():
@@ -282,12 +322,15 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--device", default=None, help="Optional path to a specific input device")
     parser.add_argument("--debug", action="store_true", help="Print incoming key presses")
     parser.add_argument("--dry-run", action="store_true", help="Start without opening a HID device")
+    parser.add_argument("--aplay-card", type=int, default=None, help="ALSA card number to use for playback (for example 0)")
     return parser.parse_args(argv)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(argv)
     config = load_config(args.config)
+    if args.aplay_card is not None:
+        config["aplay_card"] = args.aplay_card
     service = SfxBoxService(
         config=config,
         debug=args.debug,

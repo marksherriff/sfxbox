@@ -1,7 +1,8 @@
-ready_sound: /home/bbplayers/sfxbox/sounds/ready.wav
+ready_sound: sounds/ready.wav
 debug: true
 debounce_seconds: 0.25
-sounds:
-  default: /home/bbplayers/sfxbox/sounds/default.wav
-  space: /home/bbplayers/sfxbox/sounds/space.wav
-  enter: /home/bbplayers/sfxbox/sounds/enter.wav
+aplay_card: 0
+bindings:
+  KEY_PAGEDOWN: sounds/feed.wav
+  KEY_PAGEUP: sounds/feed.wav
+  KEY_DOT: sounds/feed.wav
