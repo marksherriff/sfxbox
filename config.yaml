@@ -2,7 +2,14 @@ ready_sound: sounds/beep.wav
 debug: true
 debounce_seconds: 0.25
 aplay_card: 
+streamdeck:
+  enabled: false
+  only_15_key: true
+  brightness: 45
 bindings:
+  STREAMDECK_1: sounds/beep.wav
+  STREAMDECK_2: sounds/beep.wav
+  STREAMDECK_3: sounds/beep.wav
   KEY_PAGEDOWN: sounds/beep.wav
   KEY_PAGEUP: sounds/beep.wav
   KEY_DOT: sounds/beep.wav
