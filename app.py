@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import errno
 import os
+import queue
 import select
 import sys
 import threading
@@ -147,6 +148,7 @@ class MultiHidSfxBoxService:
             debounce_seconds=float(config.get("debounce_seconds", 0.25)),
         )
         self._ignored_hid_device_ids: set[str] = set()
+        self._queued_keys: queue.SimpleQueue[tuple[str, str]] = queue.SimpleQueue()
         self._key_lock = threading.Lock()
         self._last_key_times: dict[tuple[str, str], float] = {}
 
@@ -180,9 +182,11 @@ class MultiHidSfxBoxService:
             print(f"Listening for Stream Deck input on {streamdeck_listener.device_names}")
         try:
             while True:
+                self._drain_queued_keys()
                 if devices:
                     try:
-                        readable, _, _ = select.select(devices, [], [], 0.5)
+                        timeout = 0.05 if streamdeck_listener is not None else 0.5
+                        readable, _, _ = select.select(devices, [], [], timeout)
                     except OSError as exc:
                         if exc.errno != errno.ENODEV:
                             raise
@@ -196,7 +200,7 @@ class MultiHidSfxBoxService:
                                 raise
                             devices = self._remove_device(devices, device)
                 else:
-                    time.sleep(0.5)
+                    time.sleep(0.05)
         except KeyboardInterrupt:
             print("Keyboard interrupt received; shutting down.")
         finally:
@@ -261,8 +265,8 @@ class MultiHidSfxBoxService:
             )
 
         listener = StreamDeckButtonListener(
-            on_key=self._handle_key,
-            debug=self._debug,
+            on_key=self._queue_key,
+            debug=False,
             brightness=self._streamdeck_config["brightness"],
             only_15_key=self._streamdeck_config["only_15_key"],
             reset_on_exit=self._streamdeck_config["reset_on_exit"],
@@ -278,6 +282,19 @@ class MultiHidSfxBoxService:
         if not self._should_process_key(device_id, key_name):
             return
         self._sound_controller.play_for_key(key_name)
+
+    def _queue_key(self, device_id: str, key_name: str) -> None:
+        self._queued_keys.put((device_id, key_name))
+
+    def _drain_queued_keys(self) -> None:
+        while True:
+            try:
+                device_id, key_name = self._queued_keys.get_nowait()
+            except queue.Empty:
+                return
+            if self._debug:
+                print(f"Key pressed on {device_id}: {key_name}")
+            self._handle_key(device_id, key_name)
 
     def _should_process_key(self, device_id: str, key_name: str) -> bool:
         now = time.monotonic()

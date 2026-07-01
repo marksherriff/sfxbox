@@ -259,6 +259,33 @@ class AppModuleTests(unittest.TestCase):
         self.assertEqual(listener.device_ids, [])
         self.assertTrue(deck.closed)
 
+    def test_streamdeck_keys_are_queued_for_service_loop(self) -> None:
+        service = app.MultiHidSfxBoxService(
+            config={
+                "ready_sound": "/tmp/ready.wav",
+                "debug": False,
+                "sounds": {},
+                "debounce_seconds": 0.25,
+            },
+            debug=False,
+            device_paths=None,
+            dry_run=True,
+        )
+        handled_keys = []
+        service._handle_key = lambda device_id, key_name: handled_keys.append((device_id, key_name))
+
+        service._queue_key("streamdeck:ABC123", "STREAMDECK_1")
+        service._queue_key("streamdeck:ABC123", "STREAMDECK_2")
+        service._drain_queued_keys()
+
+        self.assertEqual(
+            handled_keys,
+            [
+                ("streamdeck:ABC123", "STREAMDECK_1"),
+                ("streamdeck:ABC123", "STREAMDECK_2"),
+            ],
+        )
+
 
 class FakeStreamDeck:
     def __init__(self, *, key_count: int, serial_number: str = "", reset_error: OSError | None = None) -> None:
