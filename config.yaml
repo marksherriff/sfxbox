@@ -14,13 +14,13 @@ bindings:
   STREAMDECK_1: sounds/carhorn.wav
   STREAMDECK_2: sounds/drumroll.wav
   STREAMDECK_3: sounds/panpipes.wav
-  STREAMDECK_4: sounds/recording1.mp3
-  STREAMDECK_5: sounds/recording2.mp3
-  STREAMDECK_6: sounds/recording3.mp3
-  STREAMDECK_7: sounds/recording4.mp3
+  STREAMDECK_4: sounds/recording1b.mp3
+  STREAMDECK_5: sounds/recording2b.mp3
+  STREAMDECK_6: sounds/recording3b.mp3
+  STREAMDECK_7: sounds/recording4b.mp3
   STREAMDECK_8: sounds/block.wav
-  STREAMDECK_9: sounds/recording5.mp3
-  STREAMDECK_10: sounds/recording6.mp3
+  STREAMDECK_9: sounds/recording5b.mp3
+  STREAMDECK_10: sounds/recording6b.mp3
   KEY_PAGEDOWN: sounds/beep.wav
   KEY_PAGEUP: sounds/beep.wav
   KEY_DOT: sounds/beep.wav
