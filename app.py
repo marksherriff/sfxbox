@@ -11,6 +11,7 @@ import select
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
 from main import DEFAULT_CONFIG_PATH, ConfigError, load_config, normalize_key_name, resolve_sound_path
@@ -31,6 +32,13 @@ try:
     from StreamDeck.DeviceManager import DeviceManager  # type: ignore[import-not-found]
 except ImportError:  # pragma: no cover - optional dependency for runtime
     DeviceManager = None
+
+try:
+    from PIL import Image  # type: ignore[import-not-found]
+    from StreamDeck.ImageHelpers import PILHelper  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - optional dependency for runtime
+    Image = None
+    PILHelper = None
 
 
 class PygameSoundController:
@@ -270,6 +278,7 @@ class MultiHidSfxBoxService:
             brightness=self._streamdeck_config["brightness"],
             only_15_key=self._streamdeck_config["only_15_key"],
             reset_on_exit=self._streamdeck_config["reset_on_exit"],
+            button_images=self._streamdeck_config["images"],
             manager=DeviceManager(),
         )
         listener.open()
@@ -354,6 +363,7 @@ class StreamDeckButtonListener:
         brightness: Optional[int],
         only_15_key: bool,
         reset_on_exit: bool,
+        button_images: dict[str, str],
         manager: Any,
     ) -> None:
         self._on_key = on_key
@@ -361,6 +371,7 @@ class StreamDeckButtonListener:
         self._brightness = brightness
         self._only_15_key = only_15_key
         self._reset_on_exit = reset_on_exit
+        self._button_images = button_images
         self._manager = manager
         self._decks: list[Any] = []
         self._deck_descriptions: dict[int, str] = {}
@@ -383,6 +394,7 @@ class StreamDeckButtonListener:
                 deck.reset()
                 if self._brightness is not None:
                     deck.set_brightness(self._brightness)
+                self._set_configured_key_images(deck)
                 deck.set_key_callback(self._handle_streamdeck_key)
             except OSError as exc:
                 if getattr(exc, "errno", None) != errno.ENODEV:
@@ -431,6 +443,27 @@ class StreamDeckButtonListener:
                 return str(value)
         return str(deck)
 
+    def _set_configured_key_images(self, deck: Any) -> None:
+        if not self._button_images:
+            return
+        if Image is None or PILHelper is None:
+            raise RuntimeError("Stream Deck button images require Pillow. Install it with 'pip install Pillow'.")
+
+        for key_name, image_path in self._button_images.items():
+            key_index = _streamdeck_key_index(key_name, deck.key_count())
+            if key_index is None:
+                print(f"Ignoring invalid Stream Deck image key: {key_name}", file=sys.stderr)
+                continue
+
+            resolved_path = resolve_asset_path(image_path, default_subdir="images")
+            if not os.path.isfile(resolved_path):
+                print(f"Stream Deck image file not found: {resolved_path}", file=sys.stderr)
+                continue
+
+            with Image.open(resolved_path) as image:
+                key_image = PILHelper.create_scaled_image(deck, image.convert("RGB"), margins=[0, 0, 0, 0])
+                deck.set_key_image(key_index, PILHelper.to_native_format(deck, key_image))
+
 
 def _configured_sound_paths(config: Dict[str, Any]) -> list[str]:
     paths = []
@@ -461,6 +494,37 @@ def _is_ignored_streamdeck_evdev_device(device: Any, ignored_device_ids: set[str
     return any(device_id.lower() in normalized_device_text for device_id in ignored_device_ids if device_id)
 
 
+def _streamdeck_key_index(key_name: str, key_count: int) -> Optional[int]:
+    normalized_key = normalize_key_name(key_name)
+    if normalized_key.startswith("STREAMDECK_"):
+        raw_index = normalized_key.removeprefix("STREAMDECK_")
+    else:
+        raw_index = normalized_key
+    if not raw_index.isdigit():
+        return None
+    key_index = int(raw_index) - 1
+    if key_index < 0 or key_index >= key_count:
+        return None
+    return key_index
+
+
+def resolve_asset_path(asset_path: str, *, default_subdir: str) -> str:
+    expanded_path = os.path.expanduser(str(asset_path))
+    if os.path.isabs(expanded_path):
+        return expanded_path
+
+    base_dir = DEFAULT_CONFIG_PATH.parent
+    candidates = [
+        base_dir / expanded_path,
+        Path.cwd() / expanded_path,
+        base_dir / default_subdir / os.path.basename(expanded_path),
+    ]
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return str(candidate)
+    return str(base_dir / expanded_path)
+
+
 def _close_device(device: Any) -> None:
     try:
         device.close()
@@ -488,7 +552,14 @@ def _normalize_streamdeck_config(config: Dict[str, Any]) -> dict[str, Any]:
         "brightness": brightness,
         "only_15_key": bool(streamdeck_config.get("only_15_key", True)),
         "reset_on_exit": bool(streamdeck_config.get("reset_on_exit", True)),
+        "images": _normalize_streamdeck_images(streamdeck_config.get("images", {})),
     }
+
+
+def _normalize_streamdeck_images(raw_images: Any) -> dict[str, str]:
+    if not isinstance(raw_images, dict):
+        return {}
+    return {normalize_key_name(str(key)): str(value) for key, value in raw_images.items() if isinstance(value, str)}
 
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:

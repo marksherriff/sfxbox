@@ -21,7 +21,7 @@ Simple Python app for turning a Raspberry Pi into a sound effects box for theate
    - `sudo apt update`
    - `sudo apt install -y python3-pip`
    - `python3 -m pip install --user evdev pygame pyyaml`
-   - Optional Stream Deck support: `python3 -m pip install --user streamdeck`
+   - Optional Stream Deck support: `python3 -m pip install --user streamdeck Pillow`
 2. Place your WAV files in the sounds directory (or update the paths in [config.yaml](config.yaml)).
 3. Run the service:
    - `python3 app.py`
@@ -32,6 +32,7 @@ Simple Python app for turning a Raspberry Pi into a sound effects box for theate
 6. Optional: listen to a connected 15-button Stream Deck:
    - `python3 app.py --streamdeck`
    - Stream Deck buttons are bound as `STREAMDECK_1` through `STREAMDECK_15` in [config.yaml](config.yaml).
+   - Optional Stream Deck button images can be configured under `streamdeck.images` with keys like `STREAMDECK_1` or `1`.
    - To use only the Stream Deck and skip keyboard-style HID devices: `python3 app.py --streamdeck --no-hid`
 
 ## Notes

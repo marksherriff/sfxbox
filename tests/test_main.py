@@ -223,6 +223,7 @@ class AppModuleTests(unittest.TestCase):
             brightness=45,
             only_15_key=True,
             reset_on_exit=True,
+            button_images={},
             manager=FakeStreamDeckManager([deck, FakeStreamDeck(key_count=32)]),
         )
 
@@ -251,6 +252,7 @@ class AppModuleTests(unittest.TestCase):
             brightness=45,
             only_15_key=True,
             reset_on_exit=True,
+            button_images={},
             manager=FakeStreamDeckManager([deck]),
         )
 
@@ -295,6 +297,7 @@ class AppModuleTests(unittest.TestCase):
             brightness=45,
             only_15_key=True,
             reset_on_exit=True,
+            button_images={},
             manager=FakeStreamDeckManager([deck]),
         )
 
@@ -311,6 +314,36 @@ class AppModuleTests(unittest.TestCase):
             ],
         )
 
+    def test_streamdeck_listener_sets_configured_button_images(self) -> None:
+        deck = FakeStreamDeck(key_count=15, serial_number="ABC123")
+        fake_image_module = mock.MagicMock()
+        fake_image_module.open.return_value.__enter__.return_value.convert.return_value = "rgb-image"
+        fake_pil_helper = mock.Mock()
+        fake_pil_helper.create_scaled_image.return_value = "scaled-image"
+        fake_pil_helper.to_native_format.return_value = b"native-image"
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            image_path = Path(tmp_dir) / "button.png"
+            image_path.write_bytes(b"not a real png because PIL is faked")
+            listener = app.StreamDeckButtonListener(
+                on_key=lambda device_id, key_name: None,
+                debug=False,
+                brightness=45,
+                only_15_key=True,
+                reset_on_exit=True,
+                button_images={
+                    "STREAMDECK_1": str(image_path),
+                    "2": str(image_path),
+                },
+                manager=FakeStreamDeckManager([deck]),
+            )
+
+            with mock.patch.object(app, "Image", fake_image_module), mock.patch.object(app, "PILHelper", fake_pil_helper):
+                listener.open()
+
+        self.assertEqual(deck.images, {0: b"native-image", 1: b"native-image"})
+        fake_pil_helper.create_scaled_image.assert_called_with(deck, "rgb-image", margins=[0, 0, 0, 0])
+
 
 class FakeStreamDeck:
     def __init__(self, *, key_count: int, serial_number: str = "", reset_error: OSError | None = None) -> None:
@@ -321,6 +354,7 @@ class FakeStreamDeck:
         self.opened = False
         self.closed = False
         self.brightness = None
+        self.images = {}
         self.reset_count = 0
         self.serial_error = None
 
@@ -348,6 +382,9 @@ class FakeStreamDeck:
 
     def set_key_callback(self, callback) -> None:
         self.callback = callback
+
+    def set_key_image(self, key: int, image) -> None:
+        self.images[key] = image
 
     def press(self, key: int) -> None:
         self.callback(self, key, True)

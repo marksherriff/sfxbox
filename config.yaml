@@ -6,6 +6,10 @@ streamdeck:
   enabled: false
   only_15_key: true
   brightness: 45
+  # Optional button images. Keys can be STREAMDECK_1..STREAMDECK_15 or 1..15.
+  images:
+    STREAMDECK_1: keys/streamdeck_key.png
+  #   2: images/button2.png
 bindings:
   STREAMDECK_1: sounds/beep.wav
   STREAMDECK_2: sounds/beep.wav
