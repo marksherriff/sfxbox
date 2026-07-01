@@ -8,7 +8,7 @@ Type=simple
 User=bbplayers
 Group=bbplayers
 WorkingDirectory=/home/bbplayers/sfxbox
-ExecStart=/usr/bin/python3 /home/bbplayers/sfxbox/app.py
+ExecStart=/usr/bin/python3 /home/bbplayers/sfxbox/app.py --streamdeck
 # To listen only to specific HID devices, replace ExecStart with repeated --device flags:
 # ExecStart=/usr/bin/python3 /home/bbplayers/sfxbox/app.py --device /dev/input/event1 --device /dev/input/event2
 # To use a 15-button Stream Deck without keyboard-style HID devices:
