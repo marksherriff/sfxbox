@@ -8,7 +8,16 @@ streamdeck:
   brightness: 45
   # Optional button images. Keys can be STREAMDECK_1..STREAMDECK_15 or 1..15.
   images:
-    STREAMDECK_1: keys/streamdeck_key.png
+    STREAMDECK_1: keys/carhorn.png
+    STREAMDECK_2: keys/drumroll.png
+    STREAMDECK_3: keys/pipes.png
+    STREAMDECK_4: keys/VR1.png
+    STREAMDECK_5: keys/VR2.png
+    STREAMDECK_6: keys/VR3.png
+    STREAMDECK_7: keys/VR4.png
+    STREAMDECK_8: keys/tick.png
+    STREAMDECK_9: keys/VR5.png
+    STREAMDECK_10: keys/VR6.png
   #   2: images/button2.png
 bindings:
   STREAMDECK_1: sounds/carhorn.wav
