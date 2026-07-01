@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import os
 import select
 import sys
@@ -145,6 +146,7 @@ class MultiHidSfxBoxService:
             config,
             debounce_seconds=float(config.get("debounce_seconds", 0.25)),
         )
+        self._ignored_hid_device_ids: set[str] = set()
         self._key_lock = threading.Lock()
         self._last_key_times: dict[tuple[str, str], float] = {}
 
@@ -164,8 +166,10 @@ class MultiHidSfxBoxService:
                 self._sound_controller.shutdown()
             return
 
-        devices = self._open_devices() if self._hid_enabled else []
         streamdeck_listener = self._open_streamdeck_listener()
+        if streamdeck_listener is not None:
+            self._ignored_hid_device_ids = set(streamdeck_listener.device_ids)
+        devices = self._open_devices() if self._hid_enabled else []
         if not devices and streamdeck_listener is None:
             raise RuntimeError("No keyboard-style input devices or Stream Decks were found.")
 
@@ -177,9 +181,20 @@ class MultiHidSfxBoxService:
         try:
             while True:
                 if devices:
-                    readable, _, _ = select.select(devices, [], [], 0.5)
+                    try:
+                        readable, _, _ = select.select(devices, [], [], 0.5)
+                    except OSError as exc:
+                        if exc.errno != errno.ENODEV:
+                            raise
+                        devices = self._remove_disconnected_devices(devices, close_all_if_unknown=True)
+                        continue
                     for device in readable:
-                        self._read_ready_device(device)
+                        try:
+                            self._read_ready_device(device)
+                        except OSError as exc:
+                            if exc.errno != errno.ENODEV:
+                                raise
+                            devices = self._remove_device(devices, device)
                 else:
                     time.sleep(0.5)
         except KeyboardInterrupt:
@@ -188,7 +203,7 @@ class MultiHidSfxBoxService:
             if streamdeck_listener is not None:
                 streamdeck_listener.close()
             for device in devices:
-                device.close()
+                _close_device(device)
             self._sound_controller.shutdown()
 
     def _read_ready_device(self, device: Any) -> None:
@@ -219,15 +234,21 @@ class MultiHidSfxBoxService:
                 device = evdev.InputDevice(device_path)
             except OSError:
                 continue
+            if self._streamdeck_config["enabled"] and _is_ignored_streamdeck_evdev_device(
+                device,
+                self._ignored_hid_device_ids,
+            ):
+                _close_device(device)
+                continue
             try:
                 capabilities = device.capabilities()
             except OSError:
-                device.close()
+                _close_device(device)
                 continue
             if ecodes.EV_KEY in capabilities:
                 devices.append(device)
             else:
-                device.close()
+                _close_device(device)
         return devices
 
     def _open_streamdeck_listener(self) -> Optional["StreamDeckButtonListener"]:
@@ -275,7 +296,34 @@ class MultiHidSfxBoxService:
         name = ecodes.KEY.get(code)
         if not name:
             return None
+        if name == "KEY_UNKNOWN":
+            return None
         return normalize_key_name(name)
+
+    def _remove_disconnected_devices(self, devices: list[Any], *, close_all_if_unknown: bool = False) -> list[Any]:
+        remaining = []
+        for device in devices:
+            try:
+                select.select([device], [], [], 0)
+            except OSError:
+                _close_device(device)
+            else:
+                remaining.append(device)
+        if len(remaining) == len(devices) and close_all_if_unknown:
+            for device in remaining:
+                _close_device(device)
+            return []
+        return remaining
+
+    @staticmethod
+    def _remove_device(devices: list[Any], disconnected_device: Any) -> list[Any]:
+        remaining = []
+        for device in devices:
+            if device is disconnected_device:
+                _close_device(device)
+            else:
+                remaining.append(device)
+        return remaining
 
 
 class StreamDeckButtonListener:
@@ -303,22 +351,40 @@ class StreamDeckButtonListener:
     def device_names(self) -> str:
         return ", ".join(self._describe_deck(deck) for deck in self._decks)
 
+    @property
+    def device_ids(self) -> list[str]:
+        return [self._describe_deck(deck) for deck in self._decks]
+
     def open(self) -> None:
         for deck in self._manager.enumerate():
             if self._only_15_key and deck.key_count() != 15:
                 continue
-            deck.open()
-            deck.reset()
-            if self._brightness is not None:
-                deck.set_brightness(self._brightness)
-            deck.set_key_callback(self._handle_streamdeck_key)
-            self._decks.append(deck)
+            try:
+                deck.open()
+                deck.reset()
+                if self._brightness is not None:
+                    deck.set_brightness(self._brightness)
+                deck.set_key_callback(self._handle_streamdeck_key)
+            except OSError as exc:
+                if getattr(exc, "errno", None) != errno.ENODEV:
+                    raise
+                try:
+                    deck.close()
+                except OSError:
+                    pass
+                continue
+            else:
+                self._decks.append(deck)
 
     def close(self) -> None:
         for deck in self._decks:
-            if self._reset_on_exit:
-                deck.reset()
-            deck.close()
+            try:
+                if self._reset_on_exit:
+                    deck.reset()
+                deck.close()
+            except OSError as exc:
+                if getattr(exc, "errno", None) != errno.ENODEV:
+                    raise
         self._decks = []
 
     def _handle_streamdeck_key(self, deck: Any, key: int, state: bool) -> None:
@@ -352,6 +418,31 @@ def _configured_sound_paths(config: Dict[str, Any]) -> list[str]:
         if isinstance(section, dict):
             paths.extend(value for value in section.values() if isinstance(value, str))
     return paths
+
+
+def _is_ignored_streamdeck_evdev_device(device: Any, ignored_device_ids: set[str]) -> bool:
+    device_text = " ".join(
+        str(value)
+        for value in (
+            getattr(device, "name", ""),
+            getattr(device, "path", ""),
+            getattr(device, "phys", ""),
+            getattr(device, "uniq", ""),
+        )
+        if value
+    )
+    normalized_device_text = device_text.lower()
+    if "stream deck" in normalized_device_text or "streamdeck" in normalized_device_text:
+        return True
+    return any(device_id.lower() in normalized_device_text for device_id in ignored_device_ids if device_id)
+
+
+def _close_device(device: Any) -> None:
+    try:
+        device.close()
+    except OSError as exc:
+        if getattr(exc, "errno", None) != errno.ENODEV:
+            raise
 
 
 def _normalize_streamdeck_config(config: Dict[str, Any]) -> dict[str, Any]:
