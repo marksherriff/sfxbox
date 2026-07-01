@@ -286,6 +286,31 @@ class AppModuleTests(unittest.TestCase):
             ],
         )
 
+    def test_streamdeck_callback_uses_cached_device_id(self) -> None:
+        handled_keys = []
+        deck = FakeStreamDeck(key_count=15, serial_number="ABC123")
+        listener = app.StreamDeckButtonListener(
+            on_key=lambda device_id, key_name: handled_keys.append((device_id, key_name)),
+            debug=False,
+            brightness=45,
+            only_15_key=True,
+            reset_on_exit=True,
+            manager=FakeStreamDeckManager([deck]),
+        )
+
+        listener.open()
+        deck.serial_error = OSError(19, "No such device")
+        deck.press(0)
+        deck.press(1)
+
+        self.assertEqual(
+            handled_keys,
+            [
+                ("streamdeck:ABC123", "STREAMDECK_1"),
+                ("streamdeck:ABC123", "STREAMDECK_2"),
+            ],
+        )
+
 
 class FakeStreamDeck:
     def __init__(self, *, key_count: int, serial_number: str = "", reset_error: OSError | None = None) -> None:
@@ -297,11 +322,14 @@ class FakeStreamDeck:
         self.closed = False
         self.brightness = None
         self.reset_count = 0
+        self.serial_error = None
 
     def key_count(self) -> int:
         return self._key_count
 
     def get_serial_number(self) -> str:
+        if self.serial_error is not None:
+            raise self.serial_error
         return self._serial_number
 
     def open(self) -> None:

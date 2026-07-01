@@ -363,14 +363,15 @@ class StreamDeckButtonListener:
         self._reset_on_exit = reset_on_exit
         self._manager = manager
         self._decks: list[Any] = []
+        self._deck_descriptions: dict[int, str] = {}
 
     @property
     def device_names(self) -> str:
-        return ", ".join(self._describe_deck(deck) for deck in self._decks)
+        return ", ".join(self._deck_descriptions.get(id(deck), str(deck)) for deck in self._decks)
 
     @property
     def device_ids(self) -> list[str]:
-        return [self._describe_deck(deck) for deck in self._decks]
+        return [self._deck_descriptions.get(id(deck), str(deck)) for deck in self._decks]
 
     def open(self) -> None:
         for deck in self._manager.enumerate():
@@ -378,6 +379,7 @@ class StreamDeckButtonListener:
                 continue
             try:
                 deck.open()
+                deck_description = self._describe_deck(deck)
                 deck.reset()
                 if self._brightness is not None:
                     deck.set_brightness(self._brightness)
@@ -392,6 +394,7 @@ class StreamDeckButtonListener:
                 continue
             else:
                 self._decks.append(deck)
+                self._deck_descriptions[id(deck)] = deck_description
 
     def close(self) -> None:
         for deck in self._decks:
@@ -403,15 +406,19 @@ class StreamDeckButtonListener:
                 if getattr(exc, "errno", None) != errno.ENODEV:
                     raise
         self._decks = []
+        self._deck_descriptions = {}
 
     def _handle_streamdeck_key(self, deck: Any, key: int, state: bool) -> None:
         if not state:
             return
-        key_name = f"STREAMDECK_{key + 1}"
-        device_id = f"streamdeck:{self._describe_deck(deck)}"
-        if self._debug:
-            print(f"Key pressed on {device_id}: {key_name}")
-        self._on_key(device_id, key_name)
+        try:
+            key_name = f"STREAMDECK_{key + 1}"
+            device_id = f"streamdeck:{self._deck_descriptions.get(id(deck), str(deck))}"
+            if self._debug:
+                print(f"Key pressed on {device_id}: {key_name}")
+            self._on_key(device_id, key_name)
+        except Exception as exc:  # pragma: no cover - defensive callback guard
+            print(f"Stream Deck callback failed: {exc}", file=sys.stderr)
 
     @staticmethod
     def _describe_deck(deck: Any) -> str:
