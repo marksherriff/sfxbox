@@ -103,6 +103,27 @@ class FakeMixer:
         return FakeSound(path, self.channel)
 
 
+class FakeEcodes:
+    EV_KEY = 1
+    KEY = {
+        30: "KEY_A",
+        240: "KEY_UNKNOWN",
+    }
+
+
+class FakeInputDevice:
+    def __init__(self, path: str, name: str) -> None:
+        self.path = path
+        self.name = name
+        self.closed = False
+
+    def capabilities(self):
+        return {FakeEcodes.EV_KEY: [30]}
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class AppModuleTests(unittest.TestCase):
     def test_parser_accepts_multiple_devices(self) -> None:
         args = app.parse_args(["--device", "/dev/input/event1", "--device", "/dev/input/event2"])
@@ -156,6 +177,40 @@ class AppModuleTests(unittest.TestCase):
         self.assertTrue(service._should_process_key("/dev/input/event1", "KEY_A"))
         self.assertFalse(service._should_process_key("/dev/input/event1", "KEY_A"))
         self.assertTrue(service._should_process_key("/dev/input/event2", "KEY_A"))
+
+    def test_unknown_evdev_key_is_ignored(self) -> None:
+        with mock.patch.object(app, "ecodes", FakeEcodes):
+            self.assertIsNone(app.MultiHidSfxBoxService._get_key_name(240))
+            self.assertEqual(app.MultiHidSfxBoxService._get_key_name(30), "KEY_A")
+
+    def test_streamdeck_evdev_device_is_skipped_when_streamdeck_enabled(self) -> None:
+        keyboard = FakeInputDevice("/dev/input/event1", "USB Keyboard")
+        streamdeck = FakeInputDevice("/dev/input/event2", "Elgato Stream Deck")
+        fake_evdev = mock.Mock()
+        fake_evdev.list_devices.return_value = [keyboard.path, streamdeck.path]
+        fake_evdev.InputDevice.side_effect = {
+            keyboard.path: keyboard,
+            streamdeck.path: streamdeck,
+        }.__getitem__
+        service = app.MultiHidSfxBoxService(
+            config={
+                "ready_sound": "/tmp/ready.wav",
+                "debug": False,
+                "sounds": {},
+                "debounce_seconds": 0.25,
+                "streamdeck": {"enabled": True},
+            },
+            debug=False,
+            device_paths=None,
+            dry_run=True,
+        )
+
+        with mock.patch.object(app, "evdev", fake_evdev), mock.patch.object(app, "ecodes", FakeEcodes):
+            devices = service._open_devices()
+
+        self.assertEqual(devices, [keyboard])
+        self.assertFalse(keyboard.closed)
+        self.assertTrue(streamdeck.closed)
 
     def test_streamdeck_listener_maps_one_based_button_names(self) -> None:
         handled_keys = []

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import os
 import select
 import sys
@@ -164,8 +165,8 @@ class MultiHidSfxBoxService:
                 self._sound_controller.shutdown()
             return
 
-        devices = self._open_devices() if self._hid_enabled else []
         streamdeck_listener = self._open_streamdeck_listener()
+        devices = self._open_devices() if self._hid_enabled else []
         if not devices and streamdeck_listener is None:
             raise RuntimeError("No keyboard-style input devices or Stream Decks were found.")
 
@@ -177,9 +178,20 @@ class MultiHidSfxBoxService:
         try:
             while True:
                 if devices:
-                    readable, _, _ = select.select(devices, [], [], 0.5)
+                    try:
+                        readable, _, _ = select.select(devices, [], [], 0.5)
+                    except OSError as exc:
+                        if exc.errno != errno.ENODEV:
+                            raise
+                        devices = self._remove_disconnected_devices(devices)
+                        continue
                     for device in readable:
-                        self._read_ready_device(device)
+                        try:
+                            self._read_ready_device(device)
+                        except OSError as exc:
+                            if exc.errno != errno.ENODEV:
+                                raise
+                            devices = self._remove_device(devices, device)
                 else:
                     time.sleep(0.5)
         except KeyboardInterrupt:
@@ -218,6 +230,9 @@ class MultiHidSfxBoxService:
             try:
                 device = evdev.InputDevice(device_path)
             except OSError:
+                continue
+            if self._streamdeck_config["enabled"] and _is_streamdeck_evdev_device(device):
+                device.close()
                 continue
             try:
                 capabilities = device.capabilities()
@@ -275,7 +290,30 @@ class MultiHidSfxBoxService:
         name = ecodes.KEY.get(code)
         if not name:
             return None
+        if name == "KEY_UNKNOWN":
+            return None
         return normalize_key_name(name)
+
+    def _remove_disconnected_devices(self, devices: list[Any]) -> list[Any]:
+        remaining = []
+        for device in devices:
+            try:
+                device.capabilities()
+            except OSError:
+                device.close()
+            else:
+                remaining.append(device)
+        return remaining
+
+    @staticmethod
+    def _remove_device(devices: list[Any], disconnected_device: Any) -> list[Any]:
+        remaining = []
+        for device in devices:
+            if device is disconnected_device:
+                device.close()
+            else:
+                remaining.append(device)
+        return remaining
 
 
 class StreamDeckButtonListener:
@@ -352,6 +390,21 @@ def _configured_sound_paths(config: Dict[str, Any]) -> list[str]:
         if isinstance(section, dict):
             paths.extend(value for value in section.values() if isinstance(value, str))
     return paths
+
+
+def _is_streamdeck_evdev_device(device: Any) -> bool:
+    device_text = " ".join(
+        str(value)
+        for value in (
+            getattr(device, "name", ""),
+            getattr(device, "path", ""),
+            getattr(device, "phys", ""),
+            getattr(device, "uniq", ""),
+        )
+        if value
+    )
+    normalized_device_text = device_text.lower()
+    return "stream deck" in normalized_device_text or "streamdeck" in normalized_device_text
 
 
 def _normalize_streamdeck_config(config: Dict[str, Any]) -> dict[str, Any]:
