@@ -112,9 +112,10 @@ class FakeEcodes:
 
 
 class FakeInputDevice:
-    def __init__(self, path: str, name: str) -> None:
+    def __init__(self, path: str, name: str, uniq: str = "") -> None:
         self.path = path
         self.name = name
+        self.uniq = uniq
         self.closed = False
 
     def capabilities(self):
@@ -185,7 +186,7 @@ class AppModuleTests(unittest.TestCase):
 
     def test_streamdeck_evdev_device_is_skipped_when_streamdeck_enabled(self) -> None:
         keyboard = FakeInputDevice("/dev/input/event1", "USB Keyboard")
-        streamdeck = FakeInputDevice("/dev/input/event2", "Elgato Stream Deck")
+        streamdeck = FakeInputDevice("/dev/input/event2", "hid-generic", "AL16J204153")
         fake_evdev = mock.Mock()
         fake_evdev.list_devices.return_value = [keyboard.path, streamdeck.path]
         fake_evdev.InputDevice.side_effect = {
@@ -204,6 +205,7 @@ class AppModuleTests(unittest.TestCase):
             device_paths=None,
             dry_run=True,
         )
+        service._ignored_hid_device_ids = {"AL16J204153"}
 
         with mock.patch.object(app, "evdev", fake_evdev), mock.patch.object(app, "ecodes", FakeEcodes):
             devices = service._open_devices()
@@ -241,11 +243,28 @@ class AppModuleTests(unittest.TestCase):
         self.assertEqual(deck.brightness, 45)
         self.assertEqual(deck.reset_count, 2)
 
+    def test_streamdeck_listener_skips_deck_that_disappears_during_setup(self) -> None:
+        deck = FakeStreamDeck(key_count=15, serial_number="AL16J204153", reset_error=OSError(19, "No such device"))
+        listener = app.StreamDeckButtonListener(
+            on_key=lambda device_id, key_name: None,
+            debug=False,
+            brightness=45,
+            only_15_key=True,
+            reset_on_exit=True,
+            manager=FakeStreamDeckManager([deck]),
+        )
+
+        listener.open()
+
+        self.assertEqual(listener.device_ids, [])
+        self.assertTrue(deck.closed)
+
 
 class FakeStreamDeck:
-    def __init__(self, *, key_count: int, serial_number: str = "") -> None:
+    def __init__(self, *, key_count: int, serial_number: str = "", reset_error: OSError | None = None) -> None:
         self._key_count = key_count
         self._serial_number = serial_number
+        self._reset_error = reset_error
         self.callback = None
         self.opened = False
         self.closed = False
@@ -265,6 +284,8 @@ class FakeStreamDeck:
         self.closed = True
 
     def reset(self) -> None:
+        if self._reset_error is not None:
+            raise self._reset_error
         self.reset_count += 1
 
     def set_brightness(self, brightness: int) -> None:
