@@ -109,6 +109,12 @@ class AppModuleTests(unittest.TestCase):
 
         self.assertEqual(args.device, ["/dev/input/event1", "/dev/input/event2"])
 
+    def test_parser_accepts_streamdeck_flags(self) -> None:
+        args = app.parse_args(["--streamdeck", "--no-hid"])
+
+        self.assertTrue(args.streamdeck)
+        self.assertTrue(args.no_hid)
+
     def test_pygame_controller_preloads_and_avoids_overlap(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             sound_path = Path(tmp_dir) / "beep.wav"
@@ -150,6 +156,81 @@ class AppModuleTests(unittest.TestCase):
         self.assertTrue(service._should_process_key("/dev/input/event1", "KEY_A"))
         self.assertFalse(service._should_process_key("/dev/input/event1", "KEY_A"))
         self.assertTrue(service._should_process_key("/dev/input/event2", "KEY_A"))
+
+    def test_streamdeck_listener_maps_one_based_button_names(self) -> None:
+        handled_keys = []
+        deck = FakeStreamDeck(key_count=15, serial_number="ABC123")
+        listener = app.StreamDeckButtonListener(
+            on_key=lambda device_id, key_name: handled_keys.append((device_id, key_name)),
+            debug=False,
+            brightness=45,
+            only_15_key=True,
+            reset_on_exit=True,
+            manager=FakeStreamDeckManager([deck, FakeStreamDeck(key_count=32)]),
+        )
+
+        listener.open()
+        deck.press(0)
+        deck.press(14)
+        deck.release(14)
+        listener.close()
+
+        self.assertEqual(
+            handled_keys,
+            [
+                ("streamdeck:ABC123", "STREAMDECK_1"),
+                ("streamdeck:ABC123", "STREAMDECK_15"),
+            ],
+        )
+        self.assertTrue(deck.opened)
+        self.assertEqual(deck.brightness, 45)
+        self.assertEqual(deck.reset_count, 2)
+
+
+class FakeStreamDeck:
+    def __init__(self, *, key_count: int, serial_number: str = "") -> None:
+        self._key_count = key_count
+        self._serial_number = serial_number
+        self.callback = None
+        self.opened = False
+        self.closed = False
+        self.brightness = None
+        self.reset_count = 0
+
+    def key_count(self) -> int:
+        return self._key_count
+
+    def get_serial_number(self) -> str:
+        return self._serial_number
+
+    def open(self) -> None:
+        self.opened = True
+
+    def close(self) -> None:
+        self.closed = True
+
+    def reset(self) -> None:
+        self.reset_count += 1
+
+    def set_brightness(self, brightness: int) -> None:
+        self.brightness = brightness
+
+    def set_key_callback(self, callback) -> None:
+        self.callback = callback
+
+    def press(self, key: int) -> None:
+        self.callback(self, key, True)
+
+    def release(self, key: int) -> None:
+        self.callback(self, key, False)
+
+
+class FakeStreamDeckManager:
+    def __init__(self, decks) -> None:
+        self._decks = decks
+
+    def enumerate(self):
+        return self._decks
 
 
 if __name__ == "__main__":

@@ -25,6 +25,11 @@ try:
 except ImportError:  # pragma: no cover - optional dependency for runtime
     pygame = None
 
+try:
+    from StreamDeck.DeviceManager import DeviceManager  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - optional dependency for runtime
+    DeviceManager = None
+
 
 class PygameSoundController:
     """Preloads and plays sounds through pygame.mixer with global debounce."""
@@ -125,15 +130,22 @@ class MultiHidSfxBoxService:
         debug: bool,
         device_paths: Optional[Iterable[str]],
         dry_run: bool,
+        streamdeck_enabled: Optional[bool] = None,
+        hid_enabled: Optional[bool] = None,
     ) -> None:
         self._config = config
         self._debug = debug or bool(config.get("debug", False))
         self._device_paths = list(device_paths or config.get("devices") or [])
         self._dry_run = dry_run
+        self._streamdeck_config = _normalize_streamdeck_config(config)
+        if streamdeck_enabled is not None:
+            self._streamdeck_config["enabled"] = streamdeck_enabled
+        self._hid_enabled = bool(config.get("hid_enabled", True)) if hid_enabled is None else hid_enabled
         self._sound_controller = PygameSoundController(
             config,
             debounce_seconds=float(config.get("debounce_seconds", 0.25)),
         )
+        self._key_lock = threading.Lock()
         self._last_key_times: dict[tuple[str, str], float] = {}
 
     def run(self) -> None:
@@ -152,23 +164,29 @@ class MultiHidSfxBoxService:
                 self._sound_controller.shutdown()
             return
 
-        if evdev is None:
-            raise RuntimeError("evdev is not installed. Install it with 'pip install evdev'.")
+        devices = self._open_devices() if self._hid_enabled else []
+        streamdeck_listener = self._open_streamdeck_listener()
+        if not devices and streamdeck_listener is None:
+            raise RuntimeError("No keyboard-style input devices or Stream Decks were found.")
 
-        devices = self._open_devices()
-        if not devices:
-            raise RuntimeError("No keyboard-style input devices were found.")
-
-        device_names = ", ".join(str(device) for device in devices)
-        print(f"Listening for keyboard input on {device_names}")
+        if devices:
+            device_names = ", ".join(str(device) for device in devices)
+            print(f"Listening for keyboard input on {device_names}")
+        if streamdeck_listener is not None:
+            print(f"Listening for Stream Deck input on {streamdeck_listener.device_names}")
         try:
             while True:
-                readable, _, _ = select.select(devices, [], [])
-                for device in readable:
-                    self._read_ready_device(device)
+                if devices:
+                    readable, _, _ = select.select(devices, [], [], 0.5)
+                    for device in readable:
+                        self._read_ready_device(device)
+                else:
+                    time.sleep(0.5)
         except KeyboardInterrupt:
             print("Keyboard interrupt received; shutting down.")
         finally:
+            if streamdeck_listener is not None:
+                streamdeck_listener.close()
             for device in devices:
                 device.close()
             self._sound_controller.shutdown()
@@ -186,12 +204,12 @@ class MultiHidSfxBoxService:
             if self._debug:
                 print(f"Key pressed on {device_id}: {key_name}")
 
-            if not self._should_process_key(device_id, key_name):
-                continue
-
-            self._sound_controller.play_for_key(key_name)
+            self._handle_key(device_id, key_name)
 
     def _open_devices(self) -> list[Any]:
+        if evdev is None:
+            raise RuntimeError("evdev is not installed. Install it with 'pip install evdev'.")
+
         if self._device_paths:
             return [evdev.InputDevice(device_path) for device_path in self._device_paths]
 
@@ -212,14 +230,43 @@ class MultiHidSfxBoxService:
                 device.close()
         return devices
 
+    def _open_streamdeck_listener(self) -> Optional["StreamDeckButtonListener"]:
+        if not self._streamdeck_config["enabled"]:
+            return None
+        if DeviceManager is None:
+            raise RuntimeError(
+                "python-elgato-streamdeck is not installed. "
+                "Install it with 'pip install streamdeck'."
+            )
+
+        listener = StreamDeckButtonListener(
+            on_key=self._handle_key,
+            debug=self._debug,
+            brightness=self._streamdeck_config["brightness"],
+            only_15_key=self._streamdeck_config["only_15_key"],
+            reset_on_exit=self._streamdeck_config["reset_on_exit"],
+            manager=DeviceManager(),
+        )
+        listener.open()
+        if not listener.device_names:
+            listener.close()
+            return None
+        return listener
+
+    def _handle_key(self, device_id: str, key_name: str) -> None:
+        if not self._should_process_key(device_id, key_name):
+            return
+        self._sound_controller.play_for_key(key_name)
+
     def _should_process_key(self, device_id: str, key_name: str) -> bool:
         now = time.monotonic()
         key = (device_id, key_name)
-        previous_time = self._last_key_times.get(key)
-        if previous_time is not None and now - previous_time < self._sound_controller._debounce_seconds:
-            return False
-        self._last_key_times[key] = now
-        return True
+        with self._key_lock:
+            previous_time = self._last_key_times.get(key)
+            if previous_time is not None and now - previous_time < self._sound_controller._debounce_seconds:
+                return False
+            self._last_key_times[key] = now
+            return True
 
     @staticmethod
     def _get_key_name(code: int) -> Optional[str]:
@@ -229,6 +276,70 @@ class MultiHidSfxBoxService:
         if not name:
             return None
         return normalize_key_name(name)
+
+
+class StreamDeckButtonListener:
+    """Turns Stream Deck button presses into sfxbox key names."""
+
+    def __init__(
+        self,
+        *,
+        on_key: Any,
+        debug: bool,
+        brightness: Optional[int],
+        only_15_key: bool,
+        reset_on_exit: bool,
+        manager: Any,
+    ) -> None:
+        self._on_key = on_key
+        self._debug = debug
+        self._brightness = brightness
+        self._only_15_key = only_15_key
+        self._reset_on_exit = reset_on_exit
+        self._manager = manager
+        self._decks: list[Any] = []
+
+    @property
+    def device_names(self) -> str:
+        return ", ".join(self._describe_deck(deck) for deck in self._decks)
+
+    def open(self) -> None:
+        for deck in self._manager.enumerate():
+            if self._only_15_key and deck.key_count() != 15:
+                continue
+            deck.open()
+            deck.reset()
+            if self._brightness is not None:
+                deck.set_brightness(self._brightness)
+            deck.set_key_callback(self._handle_streamdeck_key)
+            self._decks.append(deck)
+
+    def close(self) -> None:
+        for deck in self._decks:
+            if self._reset_on_exit:
+                deck.reset()
+            deck.close()
+        self._decks = []
+
+    def _handle_streamdeck_key(self, deck: Any, key: int, state: bool) -> None:
+        if not state:
+            return
+        key_name = f"STREAMDECK_{key + 1}"
+        device_id = f"streamdeck:{self._describe_deck(deck)}"
+        if self._debug:
+            print(f"Key pressed on {device_id}: {key_name}")
+        self._on_key(device_id, key_name)
+
+    @staticmethod
+    def _describe_deck(deck: Any) -> str:
+        for attr_name in ("get_serial_number", "deck_type"):
+            try:
+                value = getattr(deck, attr_name)()
+            except (AttributeError, OSError):
+                continue
+            if value:
+                return str(value)
+        return str(deck)
 
 
 def _configured_sound_paths(config: Dict[str, Any]) -> list[str]:
@@ -243,6 +354,28 @@ def _configured_sound_paths(config: Dict[str, Any]) -> list[str]:
     return paths
 
 
+def _normalize_streamdeck_config(config: Dict[str, Any]) -> dict[str, Any]:
+    raw_config = config.get("streamdeck", False)
+    if isinstance(raw_config, bool):
+        streamdeck_config: dict[str, Any] = {"enabled": raw_config}
+    elif isinstance(raw_config, dict):
+        streamdeck_config = dict(raw_config)
+        streamdeck_config["enabled"] = bool(streamdeck_config.get("enabled", True))
+    else:
+        streamdeck_config = {"enabled": False}
+
+    brightness = streamdeck_config.get("brightness")
+    if brightness is not None:
+        brightness = max(0, min(100, int(brightness)))
+
+    return {
+        "enabled": streamdeck_config["enabled"],
+        "brightness": brightness,
+        "only_15_key": bool(streamdeck_config.get("only_15_key", True)),
+        "reset_on_exit": bool(streamdeck_config.get("reset_on_exit", True)),
+    }
+
+
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the low-latency multi-HID SFX box service")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Path to the YAML config file")
@@ -253,7 +386,17 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="Input device path. Repeat this option to listen to multiple HID devices.",
     )
     parser.add_argument("--debug", action="store_true", help="Print incoming key presses")
-    parser.add_argument("--dry-run", action="store_true", help="Start without opening HID devices")
+    parser.add_argument("--dry-run", action="store_true", help="Start without opening input devices")
+    parser.add_argument(
+        "--streamdeck",
+        action="store_true",
+        help="Listen to connected 15-button Stream Deck devices",
+    )
+    parser.add_argument(
+        "--no-hid",
+        action="store_true",
+        help="Do not listen to keyboard-style evdev input devices",
+    )
     return parser.parse_args(argv)
 
 
@@ -266,6 +409,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             debug=args.debug,
             device_paths=args.device,
             dry_run=args.dry_run,
+            streamdeck_enabled=args.streamdeck or None,
+            hid_enabled=False if args.no_hid else None,
         )
         service.run()
     except (ConfigError, Exception) as exc:  # pragma: no cover - top-level guardprint
