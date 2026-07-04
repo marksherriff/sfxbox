@@ -39,7 +39,17 @@ bindings:
   KEY_KP7: sounds/recording4b.mp3
   KEY_KP8: sounds/block.wav
   KEY_KP9: sounds/recording5b.mp3
-  KEY_KP10: sounds/recording6b.mp3
+  KEY_KP0: sounds/recording6b.mp3
+  KEY_1: sounds/carhorn.wav
+  KEY_2: sounds/drumroll.wav
+  KEY_3: sounds/panpipes.wav
+  KEY_4: sounds/recording1b.mp3
+  KEY_5: sounds/recording2b.mp3
+  KEY_6: sounds/recording3b.mp3
+  KEY_7: sounds/recording4b.mp3
+  KEY_8: sounds/block.wav
+  KEY_9: sounds/recording5b.mp3
+  KEY_0: sounds/recording6b.mp3
   KEY_PAGEDOWN: sounds/beep.wav
   KEY_PAGEUP: sounds/beep.wav
   KEY_DOT: sounds/beep.wav
