@@ -2,12 +2,15 @@
 Description=SFX Box v2 low-latency multi-HID sound effects service
 After=sound.target local-fs.target
 Wants=sound.target
+After=systemd-udev-settle.service sound.target
+Wants=systemd-udev-settle.service sound.target
 
 [Service]
 Type=simple
 User=bbplayers
 Group=bbplayers
 WorkingDirectory=/home/bbplayers/sfxbox
+ExecStartPre=/bin/sleep 5
 ExecStart=/usr/bin/python3 /home/bbplayers/sfxbox/app.py --streamdeck
 # To listen only to specific HID devices, replace ExecStart with repeated --device flags:
 # ExecStart=/usr/bin/python3 /home/bbplayers/sfxbox/app.py --device /dev/input/event1 --device /dev/input/event2
