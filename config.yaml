@@ -18,6 +18,7 @@ streamdeck:
     STREAMDECK_8: keys/tick.png
     STREAMDECK_9: keys/VR5.png
     STREAMDECK_10: keys/VR6.png
+    STREAMDECK_11: keys/beep.png
   #   2: images/button2.png
 bindings:
   STREAMDECK_1: sounds/carhorn.wav
@@ -30,6 +31,7 @@ bindings:
   STREAMDECK_8: sounds/block.wav
   STREAMDECK_9: sounds/recording5b.mp3
   STREAMDECK_10: sounds/recording6b.mp3
+  STREAMDECK_11: sounds/beep.wav
   KEY_KP1: sounds/carhorn.wav
   KEY_KP2: sounds/drumroll.wav
   KEY_KP3: sounds/panpipes.wav
